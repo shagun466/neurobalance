@@ -1,8 +1,8 @@
 import { Brain, Activity, TrendingUp, Sparkles, Calendar, Heart, Zap, Award, Target, Clock, Wallet, ExternalLink, Info, Smile, Meh, Frown } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { doc, getDoc, collection, addDoc, serverTimestamp, getDocs, query, orderBy, limit, Timestamp } from 'firebase/firestore';
+import { db, projectId } from '../lib/firebase';
 
 export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState('week');
@@ -19,6 +19,8 @@ export default function DashboardPage() {
   const [restForm, setRestForm] = useState({ age: 30, sleepHours: 7.5, deep: 20, rem: 25, restMinutes: 30 });
   const [restScore, setRestScore] = useState<number | null>(null);
   const [mfiScore, setMfiScore] = useState<number | null>(null);
+  const [mfiGauge, setMfiGauge] = useState<number>(0);
+  const [mfiHistory, setMfiHistory] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
@@ -39,15 +41,15 @@ export default function DashboardPage() {
     loadProfile();
   }, [user]);
 
-  const weeklyData = [
-    { day: 'Mon', stress: 45, recovery: 65, mfi: 55 },
-    { day: 'Tue', stress: 62, recovery: 48, mfi: 62 },
-    { day: 'Wed', stress: 58, recovery: 52, mfi: 59 },
-    { day: 'Thu', stress: 72, recovery: 38, mfi: 68 },
-    { day: 'Fri', stress: 65, recovery: 45, mfi: 64 },
-    { day: 'Sat', stress: 48, recovery: 72, mfi: 52 },
-    { day: 'Sun', stress: 42, recovery: 78, mfi: 48 }
-  ];
+  const [weeklyData, setWeeklyData] = useState<Array<{ day: string; stress: number; recovery: number; mfi: number }>>([
+    { day: 'Mon', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Tue', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Wed', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Thu', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Fri', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Sat', stress: 0, recovery: 0, mfi: 0 },
+    { day: 'Sun', stress: 0, recovery: 0, mfi: 0 }
+  ])
 
   const activities = [
     { name: 'Meditation Session', time: '30 min', sot: '+2.5', icon: Brain, color: 'teal' },
@@ -55,6 +57,35 @@ export default function DashboardPage() {
     { name: 'Therapy Session', time: '60 min', sot: '+4.2', icon: Heart, color: 'blue' },
     { name: 'Yoga Practice', time: '40 min', sot: '+2.1', icon: Zap, color: 'teal' }
   ];
+
+  useEffect(() => {
+    async function loadWeekly() {
+      if (!user) return
+      const mfiSnaps = await getDocs(query(collection(db, 'users', user.uid, 'mfi_entries'), orderBy('createdAt', 'desc'), limit(7)))
+      const restSnaps = await getDocs(query(collection(db, 'users', user.uid, 'rest_entries'), orderBy('createdAt', 'desc'), limit(7)))
+      const restByDay: Record<string, number> = {}
+      restSnaps.forEach(d => {
+        const data = d.data() as { score?: number; createdAt?: Timestamp }
+        const tsField = data.createdAt as Timestamp | undefined
+        const ts = tsField ? tsField.toDate() : new Date()
+        const day = ts.toLocaleDateString(undefined, { weekday: 'short' })
+        if (typeof data.score === 'number') restByDay[day] = Math.round(data.score as number)
+      })
+      const items: Array<{ day: string; stress: number; recovery: number; mfi: number }> = []
+      mfiSnaps.forEach(d => {
+        const data = d.data() as { score?: number; createdAt?: Timestamp }
+        const tsField = data.createdAt as Timestamp | undefined
+        const ts = tsField ? tsField.toDate() : new Date()
+        const day = ts.toLocaleDateString(undefined, { weekday: 'short' })
+        const mfi = typeof data.score === 'number' ? Math.round(data.score as number) : 0
+        const recovery = typeof restByDay[day] === 'number' ? restByDay[day] : Math.min(100, Math.round(mfi + 10))
+        const stress = Math.max(0, 100 - mfi)
+        items.push({ day, stress, recovery, mfi })
+      })
+      if (items.length) setWeeklyData(items.reverse())
+    }
+    loadWeekly()
+  }, [user])
 
   const sentimentQuestions = [
     'I felt optimistic about my future today.',
@@ -172,6 +203,37 @@ export default function DashboardPage() {
     setMfiScore(mfi)
     const col = collection(db, 'users', user.uid, 'mfi_entries')
     await addDoc(col, { score: mfi, components: { sentiment: s, activity: a, rest: r }, createdAt: serverTimestamp() })
+  }
+
+  useEffect(() => {
+    if (mfiScore !== null) setMfiGauge(mfiScore)
+  }, [mfiScore])
+
+  useEffect(() => {
+    async function loadLatestMfi() {
+      if (!user) return
+      const col = collection(db, 'users', user.uid, 'mfi_entries')
+      const q = query(col, orderBy('createdAt', 'desc'), limit(1))
+      const snaps = await getDocs(q)
+      snaps.forEach(d => {
+        const data = d.data() as { score?: number }
+        if (typeof data.score === 'number') setMfiGauge(Math.round(data.score as number))
+      })
+    }
+    loadLatestMfi()
+  }, [user])
+
+  const loadAllMfiScores = async () => {
+    if (!user) return
+    const col = collection(db, 'users', user.uid, 'mfi_entries')
+    const q = query(col, orderBy('createdAt', 'desc'))
+    const snaps = await getDocs(q)
+    const scores: number[] = []
+    snaps.forEach(d => {
+      const data = d.data() as { score?: number }
+      if (typeof data.score === 'number') scores.push(Math.round(data.score))
+    })
+    setMfiHistory(scores)
   }
 
   return (
@@ -381,7 +443,10 @@ export default function DashboardPage() {
         <div className="bg-white dark:bg-gray-900 p-8 rounded-2xl border border-gray-200 dark:border-gray-700 mb-8">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Mental Fitness Index (AI)</h2>
-            <button onClick={calculateMfiAi} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate MFI</button>
+            <div className="flex gap-2">
+              <button onClick={calculateMfiAi} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate MFI</button>
+              <button onClick={loadAllMfiScores} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">View All</button>
+            </div>
           </div>
           {mfiScore!==null && (
             <div>
@@ -392,6 +457,16 @@ export default function DashboardPage() {
               <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">Combined using model from NeuroBalance2.0</div>
             </div>
           )}
+          <div className="mt-6">
+            <div className="text-sm text-gray-700 dark:text-gray-300">Firestore Project ID: <span className="font-mono">{projectId}</span></div>
+            {mfiHistory.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                {mfiHistory.map((s, i) => (
+                  <div key={i} className="p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-center text-sm text-gray-700 dark:text-gray-300">{s}</div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="grid md:grid-cols-2 gap-6 mb-8">
@@ -435,11 +510,11 @@ export default function DashboardPage() {
                   stroke="url(#gradient)"
                   strokeWidth="16"
                   fill="none"
-                  strokeDasharray={`${(62 / 100) * 565.5} 565.5`}
+                  strokeDasharray={`${(mfiGauge / 100) * 565.5} 565.5`}
                   strokeLinecap="round"
                   className="transition-all duration-1000 ease-out"
                   style={{
-                    strokeDasharray: mounted ? `${(62 / 100) * 565.5} 565.5` : '0 565.5'
+                    strokeDasharray: mounted ? `${(mfiGauge / 100) * 565.5} 565.5` : '0 565.5'
                   }}
                 />
                 <defs>
@@ -450,8 +525,8 @@ export default function DashboardPage() {
                 </defs>
               </svg>
               <div className="absolute inset-0 flex items-center justify-center flex-col">
-                <div className="text-6xl font-bold text-gray-900 dark:text-white">62</div>
-                <div className="text-sm text-gray-600 dark:text-gray-400 mt-2">Moderate Stress</div>
+                <div className="text-6xl font-bold text-gray-900 dark:text-white">{Math.round(mfiGauge)}</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400 mt-2">{mfiGauge>66?'Positive':mfiGauge<33?'Strained':'Moderate'}</div>
               </div>
             </div>
 

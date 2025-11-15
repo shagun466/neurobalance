@@ -1,5 +1,8 @@
 import { Search, Filter, TrendingUp, Building2, Sparkles, ArrowUpRight, ArrowDownRight, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { db } from '../lib/firebase';
+import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 
 type Listing = {
   org: string
@@ -14,10 +17,47 @@ type Listing = {
 }
 
 export default function MarketplacePage() {
+  const { user } = useAuth()
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [showBuyModal, setShowBuyModal] = useState(false);
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
+  const [baseSot] = useState(1.23)
+  const [baseEth] = useState(0.0028)
+  const [price, setPrice] = useState(baseSot)
+  const [ethPerSot, setEthPerSot] = useState(baseEth)
+  const [supply] = useState(1000000)
+  const [txs] = useState<Array<{ type: 'buy'|'retire', amount: number, org: string }>>([
+    { type: 'buy', amount: 2500, org: 'WellCorp' },
+    { type: 'retire', amount: 1000, org: 'GreenMind' }
+  ])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setPrice((p) => Math.max(0.5, Math.min(5, Number((p + (Math.random()-0.5)*0.05).toFixed(2)))))
+    }, 3000)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    async function loadLatestMfi() {
+      if (!user) return
+      const col = collection(db, 'users', user.uid, 'mfi_entries')
+      const q = query(col, orderBy('createdAt', 'desc'), limit(1))
+      const snaps = await getDocs(q)
+      let latest: number | null = null
+      snaps.forEach(d => {
+        const data = d.data() as { score?: number }
+        if (typeof data.score === 'number') latest = data.score as number
+      })
+      if (latest !== null) {
+        const factor = Math.max(0.7, Math.min(1.3, 1 + ((latest - 50) / 400)))
+        setPrice(Number((baseSot * factor).toFixed(2)))
+        setEthPerSot(Number((baseEth * factor).toFixed(6)))
+      }
+    }
+    loadLatestMfi()
+  }, [user, baseSot, baseEth])
 
   const listings: Listing[] = [
     {
@@ -118,6 +158,40 @@ export default function MarketplacePage() {
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Live SOT Price</p>
+              <TrendingUp className="w-4 h-4 text-green-600" />
+            </div>
+            <div className="text-3xl font-bold text-gray-900 dark:text-white">${price}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-400 mt-2">ETH per SOT: <span className="font-mono">{ethPerSot}</span></div>
+            <div className="text-xs text-gray-600 dark:text-gray-400">Approximate and simulated</div>
+          </div>
+          <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total SOT Supply</p>
+              <Building2 className="w-4 h-4 text-gray-400" />
+            </div>
+            <div className="text-3xl font-bold text-gray-900 dark:text-white">{supply.toLocaleString()}</div>
+            <div className="text-xs text-gray-600 dark:text-gray-400">Initial mint by the protocol</div>
+          </div>
+          <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Recent Activity</p>
+              <Sparkles className="w-4 h-4 text-cyan-600" />
+            </div>
+            <div className="space-y-2">
+              {txs.map((t, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">{t.org} {t.type==='buy'?'bought':'retired'} {t.amount.toLocaleString()} SOT</span>
+                  {t.type==='buy' ? (<ArrowUpRight className="w-4 h-4 text-green-600" />) : (<ArrowDownRight className="w-4 h-4 text-orange-600" />)}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 mb-8">
@@ -241,6 +315,21 @@ export default function MarketplacePage() {
                 Learn More
               </button>
             </div>
+          </div>
+        </div>
+
+        <div className="mt-8 bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">DAO Governance (Snapshot)</h2>
+            <a href="https://snapshot.org" target="_blank" rel="noreferrer" className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Open Snapshot</a>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            {[{title:'Fund therapy programs'},{title:'Adjust token supply'},{title:'Approve wellness standards'}].map((p,i)=> (
+              <div key={i} className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+                <div className="font-medium text-gray-900 dark:text-white">{p.title}</div>
+                <div className="text-xs text-gray-600 dark:text-gray-400">Simulated proposal</div>
+              </div>
+            ))}
           </div>
         </div>
 

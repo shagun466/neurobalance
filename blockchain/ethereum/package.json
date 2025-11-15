@@ -1,0 +1,14 @@
+{
+  "name": "neurobalance-ethereum",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "hardhat compile",
+    "deploy:sepolia": "node scripts/deploy.js"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2",
+    "ethers": "^6.13.2",
+    "hardhat": "^2.22.10"
+  }
+}
