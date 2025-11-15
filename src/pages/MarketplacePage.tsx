@@ -1,13 +1,25 @@
-import { Search, Filter, TrendingUp, Building2, Sparkles, ArrowUpRight, ArrowDownRight, TrendingDown, BarChart3, X } from 'lucide-react';
+import { Search, Filter, TrendingUp, Building2, Sparkles, ArrowUpRight, ArrowDownRight, X } from 'lucide-react';
 import { useState } from 'react';
+
+type Listing = {
+  org: string
+  type: string
+  sot: number
+  eth: number
+  impact: string
+  change: string
+  positive: boolean
+  projects: string[]
+  verified: boolean
+}
 
 export default function MarketplacePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [showBuyModal, setShowBuyModal] = useState(false);
-  const [selectedListing, setSelectedListing] = useState<any>(null);
+  const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
 
-  const listings = [
+  const listings: Listing[] = [
     {
       org: 'TechCorp Global',
       type: 'Corporate',

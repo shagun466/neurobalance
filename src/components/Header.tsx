@@ -1,5 +1,8 @@
 import { Brain, Moon, Sun, Menu, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { auth } from '../lib/firebase';
+import { signOut } from 'firebase/auth';
+import { useAuth } from '../context/AuthContext';
 
 interface HeaderProps {
   onNavigate: (page: string) => void;
@@ -10,6 +13,8 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
   const [darkMode, setDarkMode] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user } = useAuth();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -26,6 +31,8 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
       document.documentElement.classList.remove('dark');
     }
   }, [darkMode]);
+
+  const loggedIn = !!user;
 
   const navItems = [
     { id: 'home', label: 'Home' },
@@ -96,13 +103,64 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
                 <Moon className="w-5 h-5 text-gray-600 transition-transform duration-300 group-hover:-rotate-12" />
               )}
             </button>
-            <button
-              onClick={() => onNavigate('login')}
-              className="hidden md:block px-6 py-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium hover:shadow-xl hover:shadow-teal-500/50 transition-all duration-300 hover:scale-105 relative overflow-hidden group"
-            >
-              <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
-              <span className="relative z-10">Sign In</span>
-            </button>
+            {loggedIn ? (
+              <div className="hidden md:block relative">
+                <button
+                  onClick={() => setUserMenuOpen(!userMenuOpen)}
+                  className="px-3 py-2 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl font-medium border-2 border-gray-200 dark:border-gray-700 hover:border-teal-500 dark:hover:border-teal-500 transition-all duration-300"
+                >
+                  {(user?.photoURL) ? (
+                    <img src={user.photoURL} alt="profile" className="w-6 h-6 rounded-full" />
+                  ) : (
+                    <span className="w-6 h-6 inline-flex items-center justify-center rounded-full bg-teal-600 text-white text-xs font-bold">
+                      {(user?.displayName || user?.email || 'U').charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </button>
+                {userMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-3">
+                  <div className="flex flex-col gap-2 mt-1">
+                    <button
+                      onClick={() => {
+                        onNavigate('dashboard')
+                        setUserMenuOpen(false)
+                      }}
+                      className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700"
+                    >
+                      Profile
+                    </button>
+                    <button
+                      onClick={() => {
+                        onNavigate('dashboard')
+                        setUserMenuOpen(false)
+                      }}
+                      className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700"
+                    >
+                      Preferences
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await signOut(auth)
+                        setUserMenuOpen(false)
+                        onNavigate('home')
+                      }}
+                      className="px-3 py-2 rounded-lg bg-gradient-to-r from-teal-600 to-cyan-600 text-white"
+                    >
+                      Log Out
+                    </button>
+                  </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => onNavigate('login')}
+                className="hidden md:block px-6 py-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium hover:shadow-xl hover:shadow-teal-500/50 transition-all duration-300 hover:scale-105 relative overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
+                <span className="relative z-10">Sign In</span>
+              </button>
+            )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden p-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-300"
@@ -142,15 +200,39 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
               {item.label}
             </button>
           ))}
-          <button
-            onClick={() => {
-              onNavigate('login');
-              setMobileMenuOpen(false);
-            }}
-            className="w-full px-4 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-300"
-          >
-            Sign In
-          </button>
+          {loggedIn ? (
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  onNavigate('dashboard')
+                  setMobileMenuOpen(false)
+                }}
+                className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl font-medium border-2 border-gray-200 dark:border-gray-700 hover:border-teal-500 dark:hover:border-teal-500 transition-all duration-300"
+              >
+                Profile
+              </button>
+              <button
+                onClick={async () => {
+                  await signOut(auth);
+                  onNavigate('home');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full px-4 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-300"
+              >
+                Log Out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                onNavigate('login');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full px-4 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-300"
+            >
+              Sign In
+            </button>
+          )}
         </nav>
       </div>
     </header>

@@ -1,7 +1,14 @@
-import { Brain, Mail, Lock, Wallet, ArrowRight } from 'lucide-react';
+import { Brain, Mail, Lock, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
+import { auth, db } from '../lib/firebase';
+import { GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendSignInLinkToEmail } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-export default function LoginPage() {
+interface LoginProps {
+  onAuthenticated?: () => void
+}
+
+export default function LoginPage({ onAuthenticated }: LoginProps) {
   const [isSignup, setIsSignup] = useState(false);
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
@@ -10,11 +17,102 @@ export default function LoginPage() {
     confirmPassword: '',
     name: ''
   });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [useMagicLink, setUseMagicLink] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSignup && step < 3) {
-      setStep(step + 1);
+    setError(null);
+    if (isSignup) {
+      if (step < 3) {
+        setStep(step + 1);
+        return;
+      }
+    } else {
+      try {
+        setLoading(true);
+        if (useMagicLink) {
+          const actionCodeSettings = {
+            url: window.location.origin,
+            handleCodeInApp: true
+          } as { url: string; handleCodeInApp: boolean }
+          await sendSignInLinkToEmail(auth, formData.email, actionCodeSettings)
+          localStorage.setItem('nb_magic_email', formData.email)
+        } else {
+          await signInWithEmailAndPassword(auth, formData.email, formData.password);
+        }
+        onAuthenticated?.();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to sign in');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleAcceptAndCreateAccount = async () => {
+    if (!isSignup) return;
+    setError(null);
+    if (!formData.email || !formData.password || !formData.name) {
+      setError('Please complete all fields');
+      return;
+    }
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    try {
+      setLoading(true);
+      const cred = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        name: formData.name,
+        email: formData.email,
+        createdAt: serverTimestamp()
+      }, { merge: true });
+      onAuthenticated?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Account creation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError(null);
+    try {
+      setLoading(true);
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      await setDoc(doc(db, 'users', result.user.uid), {
+        name: result.user.displayName || '',
+        email: result.user.email || '',
+        createdAt: serverTimestamp()
+      }, { merge: true });
+      onAuthenticated?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google sign-in failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFacebook = async () => {
+    setError(null);
+    try {
+      setLoading(true);
+      const provider = new FacebookAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      await setDoc(doc(db, 'users', result.user.uid), {
+        name: result.user.displayName || '',
+        email: result.user.email || '',
+        createdAt: serverTimestamp()
+      }, { merge: true });
+      onAuthenticated?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Facebook sign-in failed');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -99,6 +197,11 @@ export default function LoginPage() {
                 : 'Sign In'
               }
             </h2>
+            {error && (
+              <div className="mb-4 px-4 py-3 rounded-xl bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200">
+                {error}
+              </div>
+            )}
 
             {step === 1 && (
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -173,9 +276,10 @@ export default function LoginPage() {
 
                 <button
                   type="submit"
-                  className="w-full px-6 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-teal-500/50 transition-all flex items-center justify-center gap-2"
+                  className="w-full px-6 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-teal-500/50 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+                  disabled={loading}
                 >
-                  {isSignup ? 'Continue' : 'Sign In'}
+                  {loading ? (isSignup ? 'Processing...' : useMagicLink ? 'Sending Link...' : 'Signing In...') : (isSignup ? 'Continue' : useMagicLink ? 'Send Magic Link' : 'Sign In')}
                   <ArrowRight className="w-5 h-5" />
                 </button>
 
@@ -193,16 +297,18 @@ export default function LoginPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <button
                     type="button"
-                    className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl font-medium text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+                    onClick={handleGoogle}
+                    className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl font-medium text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-all disabled:opacity-60"
+                    disabled={loading}
                   >
                     Google
                   </button>
                   <button
                     type="button"
+                    onClick={handleFacebook}
                     className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl font-medium text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-all flex items-center justify-center gap-2"
                   >
-                    <Wallet className="w-4 h-4" />
-                    Wallet
+                    Facebook
                   </button>
                 </div>
               </form>
@@ -258,8 +364,9 @@ export default function LoginPage() {
                     Back
                   </button>
                   <button
-                    onClick={() => setStep(3)}
-                    className="flex-1 px-6 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-teal-500/50 transition-all"
+                    onClick={handleAcceptAndCreateAccount}
+                    className="flex-1 px-6 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-teal-500/50 transition-all disabled:opacity-60"
+                    disabled={loading}
                   >
                     Accept & Continue
                   </button>
@@ -312,6 +419,14 @@ export default function LoginPage() {
                 >
                   {isSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
                 </button>
+                {!isSignup && (
+                  <div className="mt-3">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                      <input type="checkbox" checked={useMagicLink} onChange={(e) => setUseMagicLink(e.target.checked)} />
+                      Sign in with magic link
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Brain } from 'lucide-react';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -10,15 +10,41 @@ import DAOPage from './pages/DAOPage';
 import DocsPage from './pages/DocsPage';
 import AboutPage from './pages/AboutPage';
 import LoginPage from './pages/LoginPage';
+import { useAuth } from './context/AuthContext';
+import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth'
+import { auth } from './lib/firebase'
 
 function App() {
   const [currentPage, setCurrentPage] = useState('home');
   const [showAIAssistant, setShowAIAssistant] = useState(false);
+  const { user } = useAuth();
+  
+
+  useEffect(() => {
+    if (currentPage === 'dashboard' && !user) {
+      setCurrentPage('login');
+    }
+  }, [currentPage, user]);
+
+  
+
+  useEffect(() => {
+    if (isSignInWithEmailLink(auth, window.location.href)) {
+      const stored = localStorage.getItem('nb_magic_email') || ''
+      const email = stored || ''
+      if (email) {
+        signInWithEmailLink(auth, email, window.location.href).then(() => {
+          localStorage.removeItem('nb_magic_email')
+          setCurrentPage('dashboard')
+        }).catch(() => {})
+      }
+    }
+  }, [])
 
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <DashboardPage />;
+        return user ? <DashboardPage /> : <LoginPage onAuthenticated={() => setCurrentPage('dashboard')} />;
       case 'marketplace':
         return <MarketplacePage />;
       case 'dao':
@@ -28,7 +54,7 @@ function App() {
       case 'about':
         return <AboutPage />;
       case 'login':
-        return <LoginPage />;
+        return <LoginPage onAuthenticated={() => { setCurrentPage('dashboard'); }} />;
       default:
         return <HomePage onNavigate={setCurrentPage} />;
     }
@@ -49,6 +75,7 @@ function App() {
       </button>
 
       <AIAssistant isOpen={showAIAssistant} onClose={() => setShowAIAssistant(false)} />
+      
     </div>
   );
 }

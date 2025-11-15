@@ -1,14 +1,43 @@
-import { Brain, Activity, TrendingUp, Sparkles, Calendar, Heart, Zap, Award, Target, Clock, Wallet, ExternalLink } from 'lucide-react';
+import { Brain, Activity, TrendingUp, Sparkles, Calendar, Heart, Zap, Award, Target, Clock, Wallet, ExternalLink, Info, Smile, Meh, Frown } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState('week');
   const [walletConnected, setWalletConnected] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const { user } = useAuth();
+  const [profileName, setProfileName] = useState<string>('');
+  const [calcTab, setCalcTab] = useState<'sentiment' | 'activity' | 'rest'>('sentiment');
+  const [sentimentAnswers, setSentimentAnswers] = useState<number[]>(Array(12).fill(3));
+  const [sentimentScore, setSentimentScore] = useState<number | null>(null);
+  const [sentimentText, setSentimentText] = useState('');
+  const [activityForm, setActivityForm] = useState({ age: 30, gender: 'other', steps: 6000, duration: 30, intensity: 3, frequency: 3 });
+  const [activityScore, setActivityScore] = useState<number | null>(null);
+  const [restForm, setRestForm] = useState({ age: 30, sleepHours: 7.5, deep: 20, rem: 25, restMinutes: 30 });
+  const [restScore, setRestScore] = useState<number | null>(null);
+  const [mfiScore, setMfiScore] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    async function loadProfile() {
+      if (!user) return;
+      const ref = doc(db, 'users', user.uid);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data() as { name?: string };
+        setProfileName(data.name || '');
+      }
+    }
+    loadProfile();
+  }, [user]);
 
   const weeklyData = [
     { day: 'Mon', stress: 45, recovery: 65, mfi: 55 },
@@ -27,11 +56,129 @@ export default function DashboardPage() {
     { name: 'Yoga Practice', time: '40 min', sot: '+2.1', icon: Zap, color: 'teal' }
   ];
 
+  const sentimentQuestions = [
+    'I felt optimistic about my future today.',
+    'I felt calm and relaxed.',
+    'I felt connected with people important to me.',
+    'I enjoyed activities I did today.',
+    'I felt productive and focused.',
+    'I felt anxious or worried.',
+    'I felt sad or down.',
+    'I felt overwhelmed by tasks.',
+    'I had trouble concentrating.',
+    'I felt irritable or easily frustrated.',
+    'I felt grateful for things today.',
+    'I felt physically energized.'
+  ];
+
+  const sentimentWeights = [
+    +1, +1, +1, +1, +1, -1, -1, -1, -1, -1, +1, +1
+  ];
+
+  const calcSentiment = () => {
+    const weighted = sentimentAnswers.reduce((sum, v, i) => sum + v * sentimentWeights[i], 0);
+    const min = 1 * sentimentWeights.reduce((s, w) => s + (w > 0 ? 1 : -1), 0);
+    const max = 5 * sentimentWeights.reduce((s, w) => s + (w > 0 ? 1 : -1), 0);
+    const norm = ((weighted - min) / (max - min)) * 100;
+    const score = Math.round(Math.max(0, Math.min(100, norm)));
+    setSentimentScore(score);
+  };
+
+  const calcActivity = () => {
+    const { age, steps, duration, intensity, frequency } = activityForm;
+    const recommendedMinutes = 150; // WHO moderate minutes/week
+    const durationScore = Math.min(1, (duration * frequency) / recommendedMinutes);
+    const stepsScore = Math.min(1, steps / 10000);
+    const intensityScore = intensity / 5;
+    // age adjustment (lightly reduce target for 60+)
+    const ageFactor = age >= 60 ? 0.9 : age <= 18 ? 1.0 : 1.0;
+    const composite = (0.5 * durationScore + 0.3 * stepsScore + 0.2 * intensityScore) * ageFactor;
+    const score = Math.round(composite * 100);
+    setActivityScore(score);
+  };
+
+  const calcRest = () => {
+    const { age, sleepHours, deep, rem, restMinutes } = restForm;
+    const recommended = age < 6 ? 11 : age < 13 ? 10 : age < 18 ? 9 : age < 60 ? 8 : 7.5;
+    const durationScore = Math.min(1, sleepHours / recommended);
+    const qualityScore = Math.min(1, (deep / 20) * 0.6 + (rem / 25) * 0.4);
+    const restScoreFactor = Math.min(1, restMinutes / 45);
+    const composite = 0.6 * durationScore + 0.3 * qualityScore + 0.1 * restScoreFactor;
+    const score = Math.round(composite * 100);
+    setRestScore(score);
+  };
+
+  const sanitizeText = (t: string) => t.replace(/<[^>]*>/g, '').slice(0, 2000)
+  const estimateTextSentiment = (t: string) => {
+    const s = sanitizeText(t).toLowerCase()
+    const pos = ['happy','great','calm','relaxed','good','optimistic','grateful']
+    const neg = ['sad','bad','anxious','worried','overwhelmed','angry','frustrated']
+    let score = 50
+    pos.forEach(w => { if (s.includes(w)) score += 5 })
+    neg.forEach(w => { if (s.includes(w)) score -= 5 })
+    return Math.max(0, Math.min(100, score))
+  }
+
+  useEffect(() => {
+    if (sentimentText.trim().length > 0) {
+      const est = estimateTextSentiment(sentimentText)
+      setSentimentScore(est)
+    }
+  }, [sentimentText])
+
+  const saveResult = async () => {
+    if (!user) return;
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const payload = calcTab === 'sentiment'
+        ? { type: 'sentiment', score: sentimentScore, answers: sentimentAnswers }
+        : calcTab === 'activity'
+        ? { type: 'activity', score: activityScore, form: activityForm }
+        : { type: 'rest', score: restScore, form: restForm };
+      const col = collection(db, 'users', user.uid, `${calcTab}_entries`);
+      await addDoc(col, { ...payload, createdAt: serverTimestamp() });
+      setSaveMsg('Saved');
+      setTimeout(() => setSaveMsg(null), 3000);
+    } catch {
+      setSaveMsg('Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportResult = () => {
+    const data = calcTab === 'sentiment'
+      ? { type: 'sentiment', score: sentimentScore, answers: sentimentAnswers }
+      : calcTab === 'activity'
+      ? { type: 'activity', score: activityScore, form: activityForm }
+      : { type: 'rest', score: restScore, form: restForm };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${calcTab}-result.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const calculateMfiAi = async () => {
+    if (!user) return
+    const s = sentimentScore ?? 50
+    const a = activityScore ?? 50
+    const r = restScore ?? 50
+    const { computeMfi } = await import('../lib/mfiService')
+    const mfi = await computeMfi({ sentiment: s, activity: a, rest: r })
+    setMfiScore(mfi)
+    const col = collection(db, 'users', user.uid, 'mfi_entries')
+    await addDoc(col, { score: mfi, components: { sentiment: s, activity: a, rest: r }, createdAt: serverTimestamp() })
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 pt-20 pb-12">
       <div className="max-w-7xl mx-auto px-6">
         <div className={`mb-8 ${mounted ? 'animate-fade-in' : 'opacity-0'}`}>
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">Your Mental Health Dashboard</h1>
+          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">{profileName ? `${profileName}'s Dashboard` : 'Your Mental Health Dashboard'}</h1>
           <p className="text-gray-600 dark:text-gray-400">Track your mental footprint and wellness progress in real-time.</p>
         </div>
 
@@ -67,6 +214,184 @@ export default function DashboardPage() {
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="bg-white dark:bg-gray-900 p-8 rounded-2xl border border-gray-200 dark:border-gray-700 mb-8">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Wellness Calculators</h2>
+            <div className="flex gap-2">
+              {(['sentiment','activity','rest'] as const).map((id) => (
+                <button
+                  key={id}
+                  onClick={() => setCalcTab(id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    calcTab === id ? 'bg-teal-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+                  }`}
+                  title={id === 'sentiment' ? 'Assess mood and feelings' : id === 'activity' ? 'Daily/weekly activity score' : 'Sleep and rest balance'}
+                >
+                  {id.charAt(0).toUpperCase() + id.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {calcTab === 'sentiment' && (
+            <div className="space-y-6">
+              <div className="grid md:grid-cols-2 gap-6">
+                {sentimentQuestions.map((q, i) => (
+                  <label key={i} className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm text-gray-700 dark:text-gray-300">{q}</span>
+                      <span title="Rate from 1 (Strongly disagree) to 5 (Strongly agree)">
+                        <Info className="w-4 h-4 text-gray-400" />
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {[1,2,3,4,5].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setSentimentAnswers((a) => { const n=[...a]; n[i]=v; return n; })}
+                          className={`px-3 py-2 rounded-lg text-sm ${sentimentAnswers[i]===v ? 'bg-teal-600 text-white' : 'bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'}`}
+                          aria-label={`Answer ${v}`}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <div>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Optional: Describe your day</span>
+                <textarea value={sentimentText} onChange={(e)=>setSentimentText(e.target.value)} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border h-24" />
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={calcSentiment} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate</button>
+                <button onClick={() => { setSentimentAnswers(Array(12).fill(3)); setSentimentScore(null); }} className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Reset</button>
+                <button onClick={saveResult} disabled={saving || sentimentScore===null} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Save</button>
+                <button onClick={exportResult} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Export</button>
+                {saveMsg && <span className="text-sm text-gray-600 dark:text-gray-400">{saveMsg}</span>}
+              </div>
+              {sentimentScore!==null && (
+                <div className="flex items-center gap-4 mt-4">
+                  <div className={`text-3xl font-bold ${sentimentScore>66?'text-green-600':sentimentScore<33?'text-red-600':'text-orange-600'}`}>{sentimentScore}</div>
+                  {sentimentScore>66 ? <Smile className="w-8 h-8 text-green-600" /> : sentimentScore<33 ? <Frown className="w-8 h-8 text-red-600" /> : <Meh className="w-8 h-8 text-orange-600" />}
+                  <div className="text-sm text-gray-700 dark:text-gray-300">{sentimentScore>66?'Positive':'Neutral/Moderate'}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {calcTab === 'activity' && (
+            <div className="space-y-6">
+              <div className="grid md:grid-cols-2 gap-6">
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Age</span>
+                  <input type="number" min={1} max={120} value={activityForm.age} onChange={(e)=>setActivityForm({...activityForm, age: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Gender</span>
+                  <select value={activityForm.gender} onChange={(e)=>setActivityForm({...activityForm, gender: e.target.value})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border">
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Steps (daily)</span>
+                  <input type="number" min={0} max={30000} value={activityForm.steps} onChange={(e)=>setActivityForm({...activityForm, steps: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Exercise Duration (minutes/session)</span>
+                  <input type="number" min={0} max={300} value={activityForm.duration} onChange={(e)=>setActivityForm({...activityForm, duration: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Intensity (1-5)</span>
+                  <input type="number" min={1} max={5} value={activityForm.intensity} onChange={(e)=>setActivityForm({...activityForm, intensity: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Frequency (sessions/week)</span>
+                  <input type="number" min={0} max={14} value={activityForm.frequency} onChange={(e)=>setActivityForm({...activityForm, frequency: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={calcActivity} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate</button>
+                <button onClick={() => { setActivityForm({ age: 30, gender: 'other', steps: 6000, duration: 30, intensity: 3, frequency: 3 }); setActivityScore(null); }} className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Reset</button>
+                <button onClick={saveResult} disabled={saving || activityScore===null} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Save</button>
+                <button onClick={exportResult} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Export</button>
+                {saveMsg && <span className="text-sm text-gray-600 dark:text-gray-400">{saveMsg}</span>}
+              </div>
+              {activityScore!==null && (
+                <div className="mt-4">
+                  <div className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{activityScore}</div>
+                  <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500" style={{ width: `${activityScore}%` }} />
+                  </div>
+                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">Compared to WHO weekly recommendation</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {calcTab === 'rest' && (
+            <div className="space-y-6">
+              <div className="grid md:grid-cols-2 gap-6">
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Age</span>
+                  <input type="number" min={1} max={120} value={restForm.age} onChange={(e)=>setRestForm({...restForm, age: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Sleep Hours (nightly)</span>
+                  <input type="number" step={0.5} min={0} max={16} value={restForm.sleepHours} onChange={(e)=>setRestForm({...restForm, sleepHours: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Deep Sleep (%)</span>
+                  <input type="number" min={0} max={100} value={restForm.deep} onChange={(e)=>setRestForm({...restForm, deep: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">REM Sleep (%)</span>
+                  <input type="number" min={0} max={100} value={restForm.rem} onChange={(e)=>setRestForm({...restForm, rem: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Wakeful Rest (minutes/day)</span>
+                  <input type="number" min={0} max={240} value={restForm.restMinutes} onChange={(e)=>setRestForm({...restForm, restMinutes: Number(e.target.value)})} className="mt-1 w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-800 border" />
+                </label>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={calcRest} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate</button>
+                <button onClick={() => { setRestForm({ age: 30, sleepHours: 7.5, deep: 20, rem: 25, restMinutes: 30 }); setRestScore(null); }} className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Reset</button>
+                <button onClick={saveResult} disabled={saving || restScore===null} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Save</button>
+                <button onClick={exportResult} className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border">Export</button>
+                {saveMsg && <span className="text-sm text-gray-600 dark:text-gray-400">{saveMsg}</span>}
+              </div>
+              {restScore!==null && (
+                <div className="mt-4">
+                  <div className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{restScore}</div>
+                  <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500" style={{ width: `${restScore}%` }} />
+                  </div>
+                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">Based on recommended sleep by age and quality factors</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white dark:bg-gray-900 p-8 rounded-2xl border border-gray-200 dark:border-gray-700 mb-8">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Mental Fitness Index (AI)</h2>
+            <button onClick={calculateMfiAi} className="px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-xl font-medium">Calculate MFI</button>
+          </div>
+          {mfiScore!==null && (
+            <div>
+              <div className="text-4xl font-bold text-gray-900 dark:text-white mb-2">{mfiScore}</div>
+              <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-teal-500 to-cyan-500" style={{ width: `${mfiScore}%` }} />
+              </div>
+              <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">Combined using model from NeuroBalance2.0</div>
+            </div>
+          )}
         </div>
 
         <div className="grid md:grid-cols-2 gap-6 mb-8">
