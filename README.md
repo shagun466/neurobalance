@@ -78,4 +78,4 @@ Response:
   - Run `npm run lint` and `npm run typecheck` before committing.
 
 ## Notes
-- This repository includes model artifacts and example backend scripts for local experimentation. For production, separate secrets and services and use environment configuration.
+- This repository includes model artifacts and example backend scripts for local experimentation. For production, separate secrets and services and use environment configuration
